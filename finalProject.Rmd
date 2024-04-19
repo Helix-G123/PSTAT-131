@@ -1,0 +1,611 @@
+---
+title: "Predicting the Salary in Data Science"
+subtitle: "PSTAT 131 Final Project"
+author: "Yesheng Guan"
+date: "2023-02-20"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, row.names = FALSE)
+```
+
+## Introduction
+
+This part aims to give a general concept of the whole project.
+
+### What does this project try to do?
+
+As students of data science, we are concerned with salary as we enter the workforce. This project can predict the appropriate salary based on various types of work and years of experience. Thus, data science students can identify the most critical factors in finding high-paying jobs and focus on those specific areas.
+
+### Why I choose Data Science?
+
+Under the background of the rapid advancements in machine learning and deep learning, chatGPT emerged and significantly impacted traditional computing systems. Consequently, data science has become an exceptionally attractive field for students seeking high-paying jobs or aiming to change the world. As a versatile discipline—enabling work in various fields like economics, chemistry, biology, computer science, beyond just data science—many students have opted to pursue a Bachelor's degree in Data Science.
+
+## Preparation 
+
+This part aims to present the package loading, and give a quick look to the data set.
+
+### Package Loading
+
+```{r,message=FALSE}
+library(knitr)
+library(tidyverse)
+library(corrr)
+library(dplyr)
+library(ggplot2)
+library(tidymodels)
+library(visdat)
+library(gridExtra)
+library(kableExtra)
+library(janitor)
+library(vip)
+```
+
+Above is the packages which would be used in the following part.
+
+### Data set
+
+```{r}
+salary <- read.csv("jobs_in_data.csv")
+knitr::kable(head(salary))%>%
+    column_spec (1:12,border_left = T, border_right = T) %>%
+  kable_styling()
+```
+
+This data is taken from Kaggle, here is the link to the [dataset](https://www.kaggle.com/datasets/hummaamqaasim/jobs-in-data?resource=download).
+
+This data is about the salary and jobs in data science field. Here are the introductions for the data:
+
+- **work_year**: The year in which the data was recorded. This field indicates the temporal context of the data, important for understanding salary trends over time.
+
+- **job_title**: The specific title of the job role, like 'Data Scientist', 'Data Engineer', or 'Data Analyst'. This column is crucial for understanding the salary distribution across various specialized roles within the data field.
+
+- **job_category**: A classification of the job role into broader categories for easier analysis. This might include areas like 'Data Analysis', 'Machine Learning', 'Data Engineering', etc.
+
+- **salary_currency**: The currency in which the salary is paid, such as USD, EUR, etc. This is important for currency conversion and understanding the actual value of the salary in a global context.
+
+- **salary**: The annual gross salary of the role in the local currency. This raw salary figure is key for direct regional salary comparisons.
+
+- **salary_in_usd**: The annual gross salary converted to United States Dollars (USD). This uniform currency conversion aids in global salary comparisons and analyses.
+
+- **employee_residence**: The country of residence of the employee. This data point can be used to explore geographical salary differences and cost-of-living variations.
+
+- **experience_level**: Classifies the professional experience level of the employee. Common categories might include 'Entry-level', 'Mid-level', 'Senior', and 'Executive', providing insight into how experience influences salary in data-related roles.
+
+- **employment_type**: Specifies the type of employment, such as 'Full-time', 'Part-time', 'Contract', etc. This helps in analyzing how different employment arrangements affect salary structures.
+
+- **work_setting**: The work setting or environment, like 'Remote', 'In-person', or 'Hybrid'. This column reflects the impact of work settings on salary levels in the data industry.
+
+- **company_location**: The country where the company is located. It helps in analyzing how the location of the company affects salary structures.
+
+- **company_size**: The size of the employer company, often categorized into small (S), medium (M), and large (L) sizes. This allows for analysis of how company size influences salary.
+
+## Exploring and Tidying the Raw Data
+
+This part aims to process the raw data to prepared.
+
+### Variable Selection
+
+Firstly, let's take a look the numbers of variables and observations.
+```{r}
+dim(salary)
+```
+
+There is 9355 observations and 12 variables. Deducting the response variable, there is still 11 variables left as our predictors!
+
+Now, let's omit some unappropriated or irrelevant variables.
+
+Obviously, the unit of salary is not commensurate. Some of them is "USD" and some is "EUR". Fortunately, we can select **salary_in_usd** as the response variable for our project. Therefore, we can simply omit **salary** and **salary_currency** from our predictors.
+
+And as for the locution information, although different states and countries have different economical condition for jobs in data science, there is no relation between **company_locution** and **salary_in_usd**. We can only focus on **employ_residence** to obtain the influence of locations.
+
+Finally, we delete three variables from our data set, which are **salary**, **salary_currency** and **company_locution**. Let's filter them out.
+
+```{r}
+salary <- salary%>%
+  select(-salary,-salary_currency,-company_location)
+```
+
+Now,we successfully have the useful information.
+
+### Tidy abundant variables
+
+Firstly, let's take a look at how many different type of outcomes we have:
+```{r}
+unique_values_count <- sapply(salary, function(x) length(unique(x)))
+
+
+kable(unique_values_count)%>%
+    column_spec (1:2,border_left = T, border_right = T) %>%
+  kable_styling()
+```
+For those outcome types less or equal to 10, we do not to take any action. And **salary_in_usd** is our response variable which is a numeric variable, so just put it there!
+
+Finally, we should only concentrate on **job_title** and **employee_residence**
+
+#### Job Tile
+
+It is impossible and ineffective to deal with 125 different types of outcome with dummy variables. Thus, we can take an approach that allows us only focus on the few outcomes with highest frequency, and ignore the others. 
+
+Firstly, take a look at the frequency of each outcomes. To avoid the overwhelming x-axis lables, a filter was set to only show the name of job tile which frequency is greater than 200.
+```{r}
+job_title_counts <- table(salary$job_title)
+job_title_df <- as.data.frame(job_title_counts)
+
+high_freq_titles <- job_title_df$Var1[job_title_df$Freq > 200]
+
+ggplot(job_title_df, aes(x = Var1, y = Freq)) +
+  geom_bar(stat = "identity") +
+  scale_x_discrete(limits = job_title_df$Var1, labels = ifelse(job_title_df$Var1 %in% high_freq_titles, as.character(job_title_df$Var1), "")) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  labs(x = "Job Title", y = "Frequency", title = "Distribution of Job Titles")
+```
+
+
+Removing those negligible outcomes, let's get the highest 8 titles:
+```{r}
+salary%>% group_by(job_title)%>%
+  dplyr::summarise(count = n()) %>%
+  dplyr::arrange(desc(count))%>%
+  head(8)%>%
+  kable()%>%
+    column_spec (1:2,border_left = T, border_right = T) %>%
+  kable_styling()
+```
+
+Now, we have found eight most representative titles. Next step should be judge if the title of each observations belongs to one of them:
+```{r}
+salary <- salary%>%
+  dplyr::mutate(is_Data_Engineer=if_else(grepl("Data Engineer",job_title),1,0))%>%
+  dplyr::mutate(is_Data_Scientist=if_else(grepl("Data Scientist",job_title),1,0))%>%
+  dplyr::mutate(is_Data_Analyst=if_else(grepl("Data Analyst",job_title),1,0))%>%
+  dplyr::mutate(is_Machine_Learning_Engineer=if_else(grepl("Machine Learning Engineer",job_title),1,0))%>%
+  dplyr::mutate(is_Applied_Scientist=if_else(grepl("Applied Scientist",job_title),1,0))%>%
+  dplyr::mutate(is_Research_Scientist=if_else(grepl("Research Scientist",job_title),1,0))%>%
+  dplyr::mutate(is_Analytics_Engineer=if_else(grepl("Analytics Engineer",job_title),1,0))%>%
+  dplyr::mutate(is_Data_Architect=if_else(grepl("Data Architect",job_title),1,0))
+```
+
+
+#### Empoloyee Residence
+
+Let's repeat what we did at job_title.
+```{r}
+employee_residence_counts <- table(salary$employee_residence)
+employee_residence_df <- as.data.frame(employee_residence_counts)
+
+high_freq_residence <- employee_residence_df$Var1[employee_residence_df$Freq > 100]
+
+ggplot(employee_residence_df, mapping = aes(x=Var1, y=Freq))+
+  geom_bar(stat = "identity")+
+  scale_x_discrete(limits=employee_residence_df$Var1, labels=if_else(employee_residence_df$Var1 %in% high_freq_residence, employee_residence_df$Var1,""))+
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  labs(x = "Employee Residence", y = "Frequency", title = "Distribution of Employee Residence")
+```
+
+Now, the situation is a little different. We can see that most of residence concentrate at **United State**. Compared to the considerable frequency of **US**, other country become less important. So we only need to judge if the residence is at the US or not:
+```{r}
+salary <- salary%>%
+  dplyr::mutate(is_residence_US=if_else(grepl("United States",employee_residence),1,0))
+```
+
+Now, we have finished the tidy step, let's write what we obtained and move to the next step!
+```{r}
+salary <- salary%>%
+  select(-job_title,-employee_residence)
+
+write.csv(salary,"salary_final.csv")
+```
+
+## Exploratory Data Analysis
+
+Before constructing our model. We have to take a look at the specific data set. Although we have already done some preparation in the previous step, it is necessary to have a closer look to the data set, make sure whether the data set is perfect enough to be used. 
+
+### Converting data type
+
+```{r}
+salary_data <- read.csv("salary_final.csv")%>%select(-X)
+```
+
+Firstly, lets take a look at the type of each variable:
+```{r}
+variable_types <- sapply(salary_data, class)
+variable_types%>%kable()%>%
+    column_spec (1:2,border_left = T, border_right = T) %>%
+  kable_styling()
+```
+
+We can see, though the data set looks perfect, the type of some variable is not sound. Therefore, we need to modify them:
+```{r}
+salary_data$work_year <- as.factor(salary_data$work_year)
+salary_data$job_category <- as.factor(salary_data$job_category)
+salary_data$experience_level <- as.factor(salary_data$experience_level)
+salary_data$employment_type <- as.factor(salary_data$employment_type)
+salary_data$work_setting <- as.factor(salary_data$work_setting)
+salary_data$company_size <- as.factor(salary_data$company_size)
+salary_data$is_Analytics_Engineer <- as.factor(salary_data$is_Analytics_Engineer)
+salary_data$is_Applied_Scientist <- as.factor(salary_data$is_Applied_Scientist)
+salary_data$is_Data_Analyst <- as.factor(salary_data$is_Data_Analyst)
+salary_data$is_Data_Architect <- as.factor(salary_data$is_Data_Architect)
+salary_data$is_Data_Engineer <- as.factor(salary_data$is_Data_Engineer)
+salary_data$is_Data_Scientist <- as.factor(salary_data$is_Data_Scientist)
+salary_data$is_Machine_Learning_Engineer <- as.factor(salary_data$is_Machine_Learning_Engineer)
+salary_data$is_Research_Scientist <- as.factor(salary_data$is_Research_Scientist)
+salary_data$is_residence_US <- as.factor(salary_data$is_residence_US)
+```
+
+Now, take a look at the new data set:
+```{r}
+variable_types <- sapply(salary_data, class)
+variable_types%>%kable()%>%
+    column_spec (1:2,border_left = T, border_right = T) %>%
+  kable_styling()
+```
+
+### Checking missing values
+
+Before starting our first model, we need to make sure the missing values in our data set:
+```{r}
+vis_miss(salary_data)
+```
+
+
+No data is missing, perfect!
+
+### Data visualization
+
+Now, we have already finished any necessary process of data processing. Let's take a look at the distribution and relations of selected variables to have a clear understanding for the whole data set.
+
+```{r,fig.cap="Pairs Plot of Predictor Variables with Salary", fig.width=9, fig.height=6}
+salary_long <- salary_data %>%
+  pivot_longer(
+    cols = -salary_in_usd,
+    names_to = "predictor",
+    values_to = "value"
+  ) %>%
+  mutate(
+    predictor_name = factor(predictor, labels = c("Work Year", "Job Category", "Experience Level",
+                                                  "Employment Type", "Work Setting", "Company Size",
+                                                  "Is Data Scientist", "Is Research Scientist",
+                                                  "Is Machine Learning Engineer", "Is Data Engineer",
+                                                  "Is Data Architect","Is Data Analyst","Is Applied Scientist",
+                                                  "is Analytics Engineer","Is Residence US"))
+  )
+p <- ggplot(salary_long, aes(x = value, y = salary_in_usd)) +
+  geom_boxplot() +
+  facet_wrap(~predictor_name,nrow = 5, scales = "free_x") +  
+  theme_minimal() +
+  theme(
+    axis.text.x = element_blank(),  
+    axis.ticks.x = element_blank(),  
+    strip.text.x = element_text(angle = 0)
+  ) +
+  labs(x = NULL, y = "Salary in USD")
+
+print(p)
+```
+
+Now, we can have an about concept about the importance of each predictors. For example, we see that **Employee Type** has few influence on the salary, while **Experience Level** plays a significant role.
+
+## Set Up for a model
+
+This part aims to do some general work for the specific models
+
+### Split data set
+
+To begin with, apply clean_names() to the data set getting the appropriate form.
+
+```{r}
+salary_data <- as_tibble(salary_data)%>%
+  clean_names()
+```
+
+Then, split the data set into training and testing. And create 5-fold cross-validation to the training set. 
+
+```{r}
+set.seed(4869)
+salary_split <- initial_split(salary_data,strata = salary_in_usd)
+salary_train <- training(salary_split)
+salary_test <- testing(salary_split)
+salary_folds <- vfold_cv(salary_train,v=5,strata = salary_in_usd)
+```
+
+### Create recipes
+
+For further models, a recipes is needed since a single recipe can be used in different models without creating new one.
+
+```{r}
+salary_recipe <- recipe(salary_in_usd~., data = salary_train)%>%
+  step_dummy(all_factor_predictors())%>%
+  step_center(all_predictors()) %>%
+  step_scale(all_predictors())
+```
+
+## Model building
+
+This part is for formal model building, including KNN, linear regression, elastic net linear regression, random forest.
+
+### Create workflow for each model
+
+
+Firstly, step up the model by specifying the model we wish to fit, the parameters we want to tune, the engine the model comes from
+
+```{r}
+lm_model <- linear_reg() %>% 
+  set_engine("lm")
+
+knn_model <- nearest_neighbor(neighbors = tune()) %>% 
+  set_mode("regression") %>% 
+  set_engine("kknn")
+
+elastic_spec <- linear_reg(penalty = tune(), 
+                           mixture = tune()) %>% 
+  set_mode("regression") %>% 
+  set_engine("glmnet")
+
+rf_spec <- rand_forest(mtry = tune(), 
+                       trees = tune(), 
+                       min_n = tune()) %>% 
+  set_engine("ranger", importance = "impurity") %>% 
+  set_mode("regression")
+```
+
+Then add those models with recipe to create the workflows.
+
+```{r}
+lm_workflow <- workflow() %>% 
+  add_model(lm_model) %>% 
+  add_recipe(salary_recipe)
+
+knn_workflow <- workflow() %>% 
+  add_model(knn_model) %>% 
+  add_recipe(salary_recipe)
+
+elastic_workflow <- workflow() %>% 
+  add_recipe(salary_recipe) %>% 
+  add_model(elastic_spec)
+
+rf_workflow <- workflow() %>% 
+  add_recipe(salary_recipe) %>% 
+  add_model(rf_spec)
+```
+
+### Tuning parameters
+
+Now, for tunning parameters, create a tuning grid to specify the ranges.
+
+```{r}
+knn_grid <- grid_regular(neighbors(range = c(1,15)), levels = 5)
+
+elastic_grid <- grid_regular(penalty(range = c(-5, 5)), mixture(range = c(0,1)), levels = 10)
+
+rf_parameter_grid <- grid_regular(mtry(range = c(1, 12)), trees(range = c(200,1000)), min_n(range = c(5,20)), levels = 8)
+```
+
+Then, tune the model and specify the workflow, k-fold cross validation folds.
+
+```{r}
+knn_tune <- tune_grid(
+    knn_workflow,
+    resamples = salary_folds,
+    grid = knn_grid
+)
+
+elastic_tune <- tune_grid(
+  elastic_workflow,
+  resamples = salary_folds,
+  grid = elastic_grid
+)
+
+rf_tune_res <- tune_grid(
+  rf_workflow,
+  resamples = salary_folds,
+  grid = rf_parameter_grid
+)
+```
+
+Finally, lets save our result.
+
+```{r}
+write_rds(knn_tune, file = "knn.rds")
+
+# ELASTIC NET
+write_rds(elastic_tune, file = "elastic.rds")
+
+# RANDOM FOREST
+write_rds(rf_tune_res, file = "rf.rds")
+```
+
+## Result analysis
+
+And finally, in this code chunk, we load the model results back in and take a look at each of them:
+
+```{r}
+knn_tuned <- read_rds(file = "knn.rds")
+
+# ELASTIC NET
+elastic_tuned <- read_rds(file = "elastic.rds")
+
+# RANDOM FOREST
+rf_tuned <- read_rds(file = "rf.rds")
+```
+
+
+```{r}
+autoplot(knn_tuned,metric = 'rmse')+theme_minimal()
+```
+
+The graph presents the relationship between the number of nearest neighbors (k) used in a k-nearest neighbors (KNN) regression model and the model's performance as measured by the Root Mean Square Error (RMSE). It shows a clear descending trend, indicating that as the number of neighbors increases, the RMSE decreases, which suggests an improvement in model performance. Specifically, the model moves from a high RMSE with fewer neighbors to a lower RMSE as neighbors increase from 1 to 15.
+
+```{r}
+autoplot(elastic_tuned, metric = 'rmse')+theme_minimal()
+```
+
+This graph visualizes the tuning performance of an Elastic Net model, showcasing the impact of varying degrees of regularization on model accuracy as measured by RMSE. Each line represents a different proportion of the Lasso penalty, ranging from 0 (pure Ridge regression) to 1 (pure Lasso regression). The x-axis indicates the amount of regularization applied, with a logarithmic scale showing a range from a small amount of regularization to a very high amount. The y-axis displays the RMSE, where lower values indicate better model accuracy. We observe that for all proportions of Lasso penalty, as the amount of regularization increases, RMSE remains relatively stable up to a certain threshold, after which it rises sharply. This suggests that there is an optimal range of regularization where the model is sufficiently penalized to prevent overfitting but not so much that it becomes underfit. The graph indicates that a pure Ridge penalty (the red line with a Lasso proportion of 0) maintains the lowest RMSE across most regularization amounts, hinting that for this particular dataset, Ridge regression might be more suitable than Lasso or a combination of both. 
+
+```{r}
+autoplot(rf_tuned, metric = 'rmse')+theme_minimal()
+```
+This collection of graphs depicts the tuning process for a random forest model, focusing on the RMSE as a function of the number of randomly selected predictors at each split, with each graph representing a different minimal node size. Across the various node sizes, we observe a common trend where the RMSE decreases as the number of predictors increases, indicating that considering more features at each split generally improves model performance. However, the rate of improvement in RMSE appears to diminish with more predictors, suggesting a point of diminishing returns where adding more predictors doesn't significantly improve model accuracy. Notably, the performance across different numbers of trees (as indicated by the colors) shows that having more trees in the forest tends to lower the RMSE, with the improvement being more pronounced at lower numbers of predictors. This aligns with the notion that more trees can provide a more stable and accurate ensemble by averaging more diverse decision trees, especially when individual trees are built on fewer predictors. As for minimal node size, larger sizes seem to result in a flatter RMSE curve, implying that trees are less sensitive to the number of predictors when the minimum size of the terminal nodes is larger. This may indicate a higher bias in the model, where it's less prone to overfitting but potentially underfitting, especially in cases where node size is excessively large. 
+
+#### RMSE
+
+Now, apply collect_metric() to have a direct look to each model's performance.
+
+```{r}
+lm_fit <- fit_resamples(lm_workflow, resamples = salary_folds)
+
+collect_metrics(lm_fit)%>%
+  filter(.metric=="rmse")%>%
+  kable()%>%
+  column_spec (1:6,border_left = T, border_right = T) %>%
+  kable_styling()
+```
+
+```{r}
+collect_metrics(knn_tuned)%>%
+  filter(.metric=="rmse")%>%
+  arrange(mean)%>%
+  kable()%>%
+  column_spec (1:7,border_left = T, border_right = T) %>%
+  kable_styling()
+```
+```{r}
+collect_metrics(elastic_tuned)%>%
+  filter(.metric=="rmse")%>%
+  arrange(mean)%>%
+  head(5)%>%
+  kable()%>%
+  column_spec (1:8,border_left = T, border_right = T) %>%
+  kable_styling()
+```
+
+```{r}
+collect_metrics(rf_tuned)%>%
+  filter(.metric=="rmse")%>%
+  arrange(mean)%>%
+  head(5)%>%
+  kable()%>%
+  column_spec (1:9,border_left = T, border_right = T) %>%
+  kable_styling()
+```
+
+### Model Selection
+
+Now, based on the RMSE, lets find out which is the best model.
+
+```{r}
+lm_rmse <- show_best(lm_fit)
+lm_rmse%>%kable()%>%
+    column_spec (1:6,border_left = T, border_right = T) %>%
+  kable_styling()
+```
+
+```{r}
+best_knn <- select_best(knn_tuned)
+
+knn_rmse <- show_best(knn_tuned, n = 1)
+knn_rmse%>%kable()%>%
+    column_spec (1:7,border_left = T, border_right = T) %>%
+  kable_styling()
+```
+
+```{r}
+best_elastic <- select_best(elastic_tuned)
+
+elastic_rmse <- show_best(elastic_tuned, n = 1)
+elastic_rmse%>%kable()%>%
+    column_spec (1:8,border_left = T, border_right = T) %>%
+  kable_styling()
+```
+
+```{r}
+best_rf <- select_best(rf_tuned)
+
+rf_rmse <- show_best(rf_tuned, n = 1)
+rf_rmse%>%kable()%>%
+    column_spec (1:9,border_left = T, border_right = T) %>%
+  kable_styling()
+```
+
+Let's make a bar plot to have a direct comparison of each model's RMSE:
+
+```{r}
+all_models <- data.frame(Model = c("Linear Regression","K Nearest Neighbors", "Elastic Net", "Random Forest"),
+                         RMSE = c(lm_rmse$mean, knn_rmse$mean, elastic_rmse$mean, rf_rmse$mean))
+
+all_models <- all_models %>%
+  arrange(desc(RMSE)) %>%
+  mutate(Model = factor(Model, levels = Model))
+
+# Creating a barplot of the RMSE values
+ggplot(all_models, aes(x=Model, y=RMSE)) +
+  geom_bar(stat = "identity", aes(fill = Model)) +
+  scale_fill_manual(values = c("blue1", "red1", "blue2", "red2")) +
+  theme(legend.position = "none") +
+  labs(title = "Comparing RMSE by Model")
+```
+
+By compared the RMSE, we can find that the best model is **Random Forest** which RMSE is about 51527.57 in the above 4 models, while KNN is the worst model.
+
+### Fitting and testing
+
+Withing the best model and appropriate parameters, we have finished all works required for prediction. Let's fit our model into the training data set.
+
+```{r}
+rf_final_workflow_train <- finalize_workflow(rf_workflow, best_rf)
+rf_final_fit_train <- fit(rf_final_workflow_train, data = salary_train)
+rf_final_fit_train %>% extract_fit_parsnip() %>% 
+  vip() +
+  theme_minimal()
+```
+
+It may be very surprising since the **employee residence** is the most important predictors. It means the high income jobs concentrate on America rather than other countries. The second most important predictor is **experience level**. The model says senior level is higher possible to get a higher salary. 
+
+Let's create a graph to show the performance by presenting the difference of actual values and predicted values.
+
+```{r}
+salary_tibble <- predict(rf_final_fit_train,new_data = salary_test%>%select(-salary_in_usd))
+salary_tibble <- bind_cols(salary_tibble,salary_test%>%select(salary_in_usd))
+salary_tibble %>% 
+  ggplot(aes(x = .pred, y = salary_in_usd)) +
+  geom_point(alpha = 0.4) +
+  geom_abline(lty = 2) +
+  theme_grey() +
+  coord_obs_pred() +
+  labs(title = "Predicted Values vs. Actual Values")
+```
+
+The scatter plot depicts a comparison between predicted and actual values of a numeric variable, likely representing salary data, given the axis label "salary_in_usd". The dashed line, presumably the line of perfect prediction, indicates where the predicted values would fall if they were exactly equal to the actual values. The points represent individual predictions, with their position relative to the line indicating their accuracy. The dense clustering of points along the line suggests that many predictions are close to accurate, but there is noticeable dispersion, especially at the lower and higher ends of the salary range. This pattern might imply a model that predicts moderately well for mid-range salaries but struggles with accuracy at the extremes, potentially due to outliers or a lack of representativeness in the training data for these salary ranges. The vertical spread of points at specific predicted values indicates variability in the actual values that correspond to those predictions, which might be attributed to factors not captured by the model. Overall, while the model seems to capture the general trend in the data, there is room for improvement, especially in enhancing the accuracy of salary predictions for the lower and upper ends of the scale.
+
+Finally, calculating the RMSE by applying the model to test data set.
+
+```{r}
+augment(rf_final_fit_train, new_data = salary_test)%>%
+  rmse(truth=salary_in_usd, estimate=.pred)%>%
+  kable()%>%
+    column_spec (1:3,border_left = T, border_right = T) %>%
+  kable_styling()
+```
+
+With the RMSE (Root Mean Square Error) being reported as 50167.18, this value represents the standard deviation of the residuals (prediction errors) for a random forest model when predicting salary, and it suggests that on average, the model's predictions are approximately $50,167.18 away from the actual values. 
+
+## Conclusion
+
+This project is dedicated to analyzing the impact of various factors on salaries. The final model chosen was Random Forest, which was expected, as Random Forest tends to work well for most data because it is nonparametric and makes no assumptions about parametric forms or outcomes. However, even though Random Forest performed better compared to several other models, its predictive ability still has shortcomings. To address these issues, further learning in the field of machine learning is required, using more sophisticated or even custom models.
+
+
+At the outset of the project, a significant amount of time was spent processing the dataset, removing unwanted predictors, and converting some character types to factor types. These preparatory steps made the subsequent model building highly efficient. Therefore, I conjecture that in project management at work, this standard should be followed: first, have a very clear understanding of the dataset and undertake a series of operations to ensure the dataset meets the standards for model building, and then begin the actual model construction.
+
+
+
+
+
